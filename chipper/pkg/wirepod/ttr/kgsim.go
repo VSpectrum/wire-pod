@@ -623,7 +623,7 @@ func KGSim(esn string, textToSay string) error {
 					ctx,
 					&vectorpb.SayTextRequest{
 						Text:           str + ".",
-						UseVectorVoice: true,
+						UseVectorVoice: false,
 						DurationScalar: 1.0,
 					},
 				)

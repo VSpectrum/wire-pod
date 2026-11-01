@@ -72,7 +72,7 @@ func sayText(robot *vector.Vector, text string) {
 				context.Background(),
 				&vectorpb.SayTextRequest{
 					Text:           text,
-					UseVectorVoice: true,
+					UseVectorVoice: false,
 					DurationScalar: 1.0,
 				},
 			)

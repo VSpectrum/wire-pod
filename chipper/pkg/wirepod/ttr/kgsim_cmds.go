@@ -298,7 +298,7 @@ func DoSayText(input string, robot *vector.Vector) error {
 		context.Background(),
 		&vectorpb.SayTextRequest{
 			Text:           input,
-			UseVectorVoice: true,
+			UseVectorVoice: false,
 			DurationScalar: 0.95,
 		},
 	)
@@ -412,7 +412,7 @@ func DoGetImage(msgs []openai.ChatCompletionMessage, param string, robot *vector
 			context.Background(),
 			&vectorpb.SayTextRequest{
 				Text:           fmt.Sprint(i),
-				UseVectorVoice: true,
+				UseVectorVoice: false,
 				DurationScalar: 1.05,
 			},
 		)
