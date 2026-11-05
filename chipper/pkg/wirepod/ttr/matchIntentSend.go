@@ -2,12 +2,15 @@ package wirepod_ttr
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	pb "github.com/digital-dream-labs/api/go/chipperpb"
+	"github.com/fforchino/vector-go-sdk/pkg/vectorpb"
 	"github.com/kercre123/wire-pod/chipper/pkg/logger"
 	"github.com/kercre123/wire-pod/chipper/pkg/scripting"
 	"github.com/kercre123/wire-pod/chipper/pkg/vars"
@@ -23,6 +26,7 @@ func IntentPass(req interface{}, intentThing string, speechText string, intentPa
 	var esn string
 	var req1 *vtt.IntentRequest
 	var req2 *vtt.IntentGraphRequest
+	var req3 *vtt.KnowledgeGraphRequest
 	var isIntentGraph bool
 	if str, ok := req.(*vtt.IntentRequest); ok {
 		req1 = str
@@ -32,6 +36,52 @@ func IntentPass(req interface{}, intentThing string, speechText string, intentPa
 		req2 = str
 		esn = req2.Device
 		isIntentGraph = true
+	} else if str, ok := req.(*vtt.KnowledgeGraphRequest); ok {
+		req3 = str
+		esn = req3.Device
+	}
+
+	if req3 != nil {
+		logger.LogUI("Intent matched (from KG/Face-Wake): " + intentThing + ", transcribed text: '" + speechText + "', device: " + esn)
+		spoken := ""
+		if intentThing == "intent_weather_extend" && isParam {
+			loc := intentParams["speakable_location_string"]
+			temp := intentParams["temperature"]
+			cond := intentParams["condition"]
+			if loc != "" && temp != "" {
+				spoken = fmt.Sprintf("In %s, it is %s degrees and %s.", loc, temp, cond)
+			}
+		}
+		kg := pb.KnowledgeGraphResponse{
+			Session:     req3.Session,
+			DeviceId:    req3.Device,
+			CommandType: "NoResultCommand",
+			SpokenText:  spoken,
+		}
+		_ = req3.Stream.Send(&kg)
+		if spoken == "" && intentThing != "intent_system_noaudio" && intentThing != "intent_system_unmatched" {
+			paramVal := ""
+			for _, v := range intentParams {
+				if v != "" {
+					paramVal = v
+					break
+				}
+			}
+			go func(esn, intentName, param string) {
+				time.Sleep(350 * time.Millisecond)
+				robot, err := connectRobot(esn)
+				if err != nil || robot == nil {
+					return
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+				defer cancel()
+				_, _ = robot.Conn.AppIntent(ctx, &vectorpb.AppIntentRequest{
+					Intent: intentName,
+					Param:  param,
+				})
+			}(esn, intentThing, paramVal)
+		}
+		return &vtt.KnowledgeGraphResponse{Intent: &kg}, nil
 	}
 
 	// intercept if not intent graph but intent graph is enabled
@@ -79,6 +129,9 @@ func IntentPass(req interface{}, intentThing string, speechText string, intentPa
 		} else {
 			logger.Println("No Parameters Sent")
 		}
+		if intentThing != "intent_greeting_hello" && ShouldTurnOnWake(esn) {
+			go EnsureTurnedOnIntent(esn, intentThing)
+		}
 		return r, nil
 	} else {
 		if err := req2.Stream.Send(&intentGraphSend); err != nil {
@@ -92,6 +145,9 @@ func IntentPass(req interface{}, intentThing string, speechText string, intentPa
 			logger.Println("Bot "+esn+" Parameters Sent:", intentParams)
 		} else {
 			logger.Println("No Parameters Sent")
+		}
+		if intentThing != "intent_greeting_hello" && ShouldTurnOnWake(esn) {
+			go EnsureTurnedOnIntent(esn, intentThing)
 		}
 		return r, nil
 	}
@@ -188,8 +244,11 @@ func pluginFunctionHandler(req interface{}, voiceText string, botSerial string) 
 	matched := false
 	var intent string
 	var igr *vtt.IntentGraphRequest
+	var kgr *vtt.KnowledgeGraphRequest
 	if str, ok := req.(*vtt.IntentGraphRequest); ok {
 		igr = str
+	} else if str, ok := req.(*vtt.KnowledgeGraphRequest); ok {
+		kgr = str
 	}
 	var pluginResponse string
 	for num, array := range PluginUtterances {
@@ -223,6 +282,14 @@ func pluginFunctionHandler(req interface{}, voiceText string, botSerial string) 
 						IsFinal:      true,
 					}
 					igr.Stream.Send(response)
+				} else if pluginResponse != "" && kgr != nil {
+					kg := pb.KnowledgeGraphResponse{
+						Session:     kgr.Session,
+						DeviceId:    kgr.Device,
+						CommandType: "NoResultCommand",
+						SpokenText:  pluginResponse,
+					}
+					kgr.Stream.Send(&kg)
 				} else if pluginResponse != "" {
 					KGSim(botSerial, pluginResponse)
 				} else {
@@ -329,7 +396,7 @@ func KnowledgeGraphResponseIG(req *vtt.IntentGraphRequest, spokenText string, qu
 		QueryText:    queryText,
 		CommandType:  pb.RobotMode_VOICE_COMMAND.String(),
 	}
-	
+
 	if err := req.Stream.Send(&intentGraphSend); err != nil {
 		return err
 	}

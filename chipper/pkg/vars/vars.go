@@ -67,6 +67,7 @@ var VoskGrammerEnable bool = false
 
 // here to prevent import cycle (localization restructure)
 var SttInitFunc func() error
+var NewWakeWordRecognizer func() (feedAudio func(pcm []byte) bool, closeRec func())
 
 var IntentList []JsonIntent
 
@@ -168,10 +169,12 @@ func Init() {
 		os.Mkdir(podDir, 0777)
 		JdocsDir = join(podDir, JdocsDir)
 		JdocsPath = JdocsDir + "/jdocs.json"
+		PersonasPath = JdocsDir + "/personas.json"
 		CustomIntentsPath = join(podDir, CustomIntentsPath)
 		BotConfigsPath = join(podDir, BotConfigsPath)
 		BotInfoPath = JdocsDir + "/" + BotInfoName
 		VoskModelPath = join(podDir, "./vosk/models/")
+		VoskSpkModelPath = join(VoskModelPath, "spk/model")
 		WhisperModelPath = join(filepath.Dir(appDir), "/../Frameworks/chipper/whisper.cpp/models/") // macos
 		ApiConfigPath = join(podDir, ApiConfigPath)
 		CertPath = join(podDir, "./certs/cert.crt")
@@ -255,6 +258,7 @@ func Init() {
 
 	ReadSessionCerts()
 	LoadCustomIntents()
+	InitPersonas()
 	VarsInited = true
 }
 
@@ -265,6 +269,9 @@ func GetDownloadedVoskModels() {
 		return
 	}
 	for _, dir := range array {
+		if dir.Name() == "spk" {
+			continue
+		}
 		DownloadedVoskModels = append(DownloadedVoskModels, dir.Name())
 	}
 }
@@ -437,7 +444,30 @@ func GetRobot(esn string) (*vector.Vector, error) {
 	return robot, nil
 }
 
+func IsDockerGatewayIP(ip string) bool {
+	ip = strings.TrimSpace(ip)
+	return strings.HasPrefix(ip, "172.") && strings.HasSuffix(ip, ".0.1")
+}
+
+func ResolvePeerIP(ip string) string {
+	ip = strings.TrimSpace(ip)
+	if IsDockerGatewayIP(ip) {
+		if vecIP := strings.TrimSpace(os.Getenv("VECTOR_IP")); vecIP != "" {
+			return vecIP
+		}
+		if len(BotInfo.Robots) == 1 && BotInfo.Robots[0].IPAddress != "" && !IsDockerGatewayIP(BotInfo.Robots[0].IPAddress) {
+			return BotInfo.Robots[0].IPAddress
+		}
+	}
+	return ip
+}
+
 func GetOutboundIP() net.IP {
+	if hostIP := strings.TrimSpace(os.Getenv("HOST_IP")); hostIP != "" {
+		if parsed := net.ParseIP(hostIP); parsed != nil {
+			return parsed
+		}
+	}
 	if runtime.GOOS == "android" {
 		ifaces, _ := anet.Interfaces()
 		for _, iface := range ifaces {

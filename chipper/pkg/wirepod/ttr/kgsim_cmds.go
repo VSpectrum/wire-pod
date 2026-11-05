@@ -29,7 +29,11 @@ const (
 	ActionGetImage   = 3
 	ActionNewRequest = 4
 	// arg: sound file
-	ActionPlaySound = 4
+	ActionPlaySound = 5
+	// arg: concise fact about the speaker
+	ActionRememberFact = 6
+	// arg: speaker's name
+	ActionSetSpeakerName = 7
 )
 
 var animationMap [][2]string = [][2]string{
@@ -132,6 +136,20 @@ var ValidLLMCommands []LLMCommand = []LLMCommand{
 		Action:          ActionNewRequest,
 		SupportedModels: []string{"all"},
 	},
+	{
+		Command:         "rememberFact",
+		Description:     "Silently saves a personal fact, preference, biographical detail, relationship, or interest about the current speaker into their persistent voice persona profile. Use this whenever the speaker tells you something about themselves (such as their job, hobbies, family, likes/dislikes, pets, or facts they want you to remember).",
+		ParamChoices:    "any concise fact about the current speaker",
+		Action:          ActionRememberFact,
+		SupportedModels: []string{"all"},
+	},
+	{
+		Command:         "setSpeakerName",
+		Description:     "Silently binds or updates the current speaker's name in their voice persona profile when they introduce themselves or tell you their name (for example, 'I am Chris' or 'My name is Sarah').",
+		ParamChoices:    "the speaker's name",
+		Action:          ActionSetSpeakerName,
+		SupportedModels: []string{"all"},
+	},
 	// {
 	// 	Command:      "playSound",
 	// 	Description:  "Plays a sound on the robot.",
@@ -150,7 +168,7 @@ func ModelIsSupported(cmd LLMCommand, model string) bool {
 }
 
 func CreatePrompt(origPrompt string, model string, isKG bool) string {
-	prompt := origPrompt + "\n\n" + "Keep in mind, user input comes from speech-to-text software, so respond accordingly. No special characters, especially these: & ^ * # @ - . No lists. No formatting."
+	prompt := origPrompt + "\n\n" + "Keep in mind, user input comes from speech-to-text software, so respond accordingly. Keep any internal reasoning or thinking very brief (at most 1 to 2 short sentences) so you can start speaking quickly. Keep your spoken answer concise (1 to 3 sentences unless asked for detail). No special characters, especially these: & ^ * # @ - . No lists. No formatting."
 	if vars.APIConfig.Knowledge.CommandsEnable {
 		prompt = prompt + "\n\n" + "You are running ON an Anki Vector robot. You have a set of commands. If you include an emoji, I will make you start over. If you want to use a command but it doesn't exist or your desired parameter isn't in the list, avoid using the command. The format is {{command||parameter}}. You can embed these in sentences. Example: \"User: How are you feeling? | Response: \"{{playAnimationWI||sad}} I'm feeling sad...\". Square brackets ([]) are not valid.\n\nUse the playAnimation or playAnimationWI commands if you want to express emotion! You are very animated and good at following instructions. Animation takes precendence over words. You are to include many animations in your response.\n\nHere is every valid command:"
 		for _, cmd := range ValidLLMCommands {
@@ -159,13 +177,15 @@ func CreatePrompt(origPrompt string, model string, isKG bool) string {
 				prompt = prompt + promptAppendage
 			}
 		}
-		if isKG && vars.APIConfig.Knowledge.SaveChat {
-			promptAppentage := "\n\nNOTE: You are in 'conversation' mode. If you ask the user a question near the end of your response, you MUST use newVoiceRequest. If you decide you want to end the conversation, you should not use it."
+		if vars.APIConfig.Knowledge.SaveChat {
+			promptAppentage := "\n\nNOTE: You are in 'conversation' mode. Use {{newVoiceRequest||now}} ONLY when you are asking the user a direct, relevant follow-up question. CRITICAL RULES:\n1. If the user is saying goodbye, thank you, that is all, never mind, or ending the conversation, DO NOT use newVoiceRequest. Say a brief goodbye or acknowledgment and let the conversation end naturally.\n2. Do NOT use newVoiceRequest on every response. Answer questions directly without forcing endless follow-ups."
 			prompt = prompt + promptAppentage
 		} else {
 			promptAppentage := "\n\nNOTE: You are NOT in 'conversation' mode. Refrain from asking the user any questions and from using newVoiceRequest."
 			prompt = prompt + promptAppentage
 		}
+	} else {
+		prompt = prompt + "\n\nYou can silently update the current speaker's voice profile using inline tags {{rememberFact||concise fact about the speaker}} whenever they share information about themselves, and {{setSpeakerName||Name}} when they tell you their name."
 	}
 	if os.Getenv("DEBUG_PRINT_PROMPT") == "true" {
 		logger.Println(prompt)
@@ -198,19 +218,25 @@ func GetActionsFromString(input string) []RobotAction {
 			continue
 		}
 
-		cmdPlusParam := strings.Split(strings.TrimSpace(strings.Split(spl, "}}")[0]), "||")
-		cmd := strings.TrimSpace(cmdPlusParam[0])
-		param := strings.TrimSpace(cmdPlusParam[1])
-		action := CmdParamToAction(cmd, param)
-		if action.Action != -1 {
-			actions = append(actions, action)
-		}
-		if len(strings.Split(spl, "}}")) != 1 {
-			action := RobotAction{
-				Action:    ActionSayText,
-				Parameter: strings.TrimSpace(strings.Split(spl, "}}")[1]),
+		parts := strings.SplitN(spl, "}}", 2)
+		cmdPlusParam := strings.SplitN(strings.TrimSpace(parts[0]), "||", 2)
+		if len(cmdPlusParam) >= 2 {
+			cmd := strings.TrimSpace(cmdPlusParam[0])
+			param := strings.TrimSpace(cmdPlusParam[1])
+			action := CmdParamToAction(cmd, param)
+			if action.Action != -1 {
+				actions = append(actions, action)
 			}
-			actions = append(actions, action)
+		}
+		if len(parts) > 1 {
+			trailing := strings.TrimSpace(parts[1])
+			if strings.Trim(trailing, " .,!?;:'\"-") != "" {
+				action := RobotAction{
+					Action:    ActionSayText,
+					Parameter: trailing,
+				}
+				actions = append(actions, action)
+			}
 		}
 	}
 	return actions
@@ -288,7 +314,10 @@ func DoPlaySound(sound string, robot *vector.Vector) error {
 func DoSayText(input string, robot *vector.Vector) error {
 
 	// just before vector speaks
-	removeSpecialCharacters(input)
+	input = removeSpecialCharacters(input)
+	if strings.Trim(input, " .,!?;:'\"-") == "" {
+		return nil
+	}
 
 	if (vars.APIConfig.STT.Language != "en-US" && vars.APIConfig.Knowledge.Provider == "openai") || vars.APIConfig.Knowledge.OpenAIVoiceWithEnglish {
 		err := DoSayText_OpenAI(robot, input)
@@ -465,35 +494,28 @@ func DoGetImage(msgs []openai.ChatCompletionMessage, param string, robot *vector
 	var fullfullRespText string
 	var fullRespSlice []string
 	var isDone bool
-	var c *openai.Client
-	switch vars.APIConfig.Knowledge.Provider {
-	case "together":
-		if vars.APIConfig.Knowledge.Model == "" {
-			vars.APIConfig.Knowledge.Model = "meta-llama/Llama-2-70b-chat-hf"
-			vars.WriteConfigToDisk()
-		}
-		conf := openai.DefaultConfig(vars.APIConfig.Knowledge.Key)
-		conf.BaseURL = "https://api.together.xyz/v1"
-		c = openai.NewClientWithConfig(conf)
-	case "openai":
-		c = openai.NewClient(vars.APIConfig.Knowledge.Key)
-	case "custom":
-		conf := openai.DefaultConfig(vars.APIConfig.Knowledge.Key)
-		conf.BaseURL = vars.APIConfig.Knowledge.Endpoint
-		c = openai.NewClientWithConfig(conf)
-	}
+	c := newLLMClient()
 	ctx := context.Background()
-	speakReady := make(chan string)
+	speakReady := make(chan string, 1)
+
+	temp := float32(1)
+	if vars.APIConfig.Knowledge.Temperature > 0 {
+		temp = vars.APIConfig.Knowledge.Temperature
+	}
+	topP := float32(1)
+	if vars.APIConfig.Knowledge.TopP > 0 {
+		topP = vars.APIConfig.Knowledge.TopP
+	}
 
 	aireq := openai.ChatCompletionRequest{
-		MaxCompletionTokens: 2048,
-		Temperature:         1,
-		TopP:                1,
-		FrequencyPenalty:    0,
-		PresencePenalty:     0,
-		Messages:            msgs,
-		Stream:              true,
+		Temperature:      temp,
+		TopP:             topP,
+		FrequencyPenalty: 0,
+		PresencePenalty:  0,
+		Messages:         msgs,
+		Stream:           true,
 	}
+	setMaxTokens(&aireq)
 	if vars.APIConfig.Knowledge.Provider == "openai" {
 		aireq.Model = openai.GPT4oMini
 		logger.Println("Using " + aireq.Model)
@@ -524,12 +546,30 @@ func DoGetImage(msgs []openai.ChatCompletionMessage, param string, robot *vector
 	}
 	//defer stream.Close()
 
+	// strips <think>...</think> etc. so Vector doesn't speak a reasoning model's thoughts
+	reasoning := newReasoningFilter(aireq.Model)
 	fmt.Println("LLM stream response: ")
 	go func() {
 		for {
 			response, err := stream.Recv()
 			if errors.Is(err, io.EOF) {
-				isDone = true
+				tail := removeSpecialCharacters(reasoning.Flush())
+				fullfullRespText = fullfullRespText + tail
+				fullRespText = fullRespText + tail
+				if len(fullRespSlice) == 0 {
+					if strings.TrimSpace(fullRespText) == "" {
+						logger.Println("LLM returned no response")
+						isDone = true
+						select {
+						case speakReady <- "":
+						default:
+						}
+						return
+					}
+					fullRespSlice = append(fullRespSlice, strings.TrimSpace(fullRespText))
+					fullfullRespText = fullRespSlice[0]
+					fullRespText = ""
+				}
 				newStr := fullRespSlice[0]
 				for i, str := range fullRespSlice {
 					if i == 0 {
@@ -541,6 +581,11 @@ func DoGetImage(msgs []openai.ChatCompletionMessage, param string, robot *vector
 					logger.Println("LLM debug: there is content after the last punctuation mark")
 					extraBit := strings.TrimPrefix(fullRespText, newStr)
 					fullRespSlice = append(fullRespSlice, extraBit)
+				}
+				isDone = true
+				select {
+				case speakReady <- "":
+				default:
 				}
 				if vars.APIConfig.Knowledge.SaveChat {
 					Remember(msgs[len(msgs)-1],
@@ -557,30 +602,24 @@ func DoGetImage(msgs []openai.ChatCompletionMessage, param string, robot *vector
 
 			if err != nil {
 				logger.Println("Stream error: " + err.Error())
+				isDone = true
+				select {
+				case speakReady <- "":
+				default:
+				}
 				return
 			}
-			fullfullRespText = fullfullRespText + removeSpecialCharacters(response.Choices[0].Delta.Content)
-			fullRespText = fullRespText + removeSpecialCharacters(response.Choices[0].Delta.Content)
-			if strings.Contains(fullRespText, "...") || strings.Contains(fullRespText, ".'") || strings.Contains(fullRespText, ".\"") || strings.Contains(fullRespText, ".") || strings.Contains(fullRespText, "?") || strings.Contains(fullRespText, "!") {
-				var sepStr string
-				if strings.Contains(fullRespText, "...") {
-					sepStr = "..."
-				} else if strings.Contains(fullRespText, ".'") {
-					sepStr = ".'"
-				} else if strings.Contains(fullRespText, ".\"") {
-					sepStr = ".\""
-				} else if strings.Contains(fullRespText, ".") {
-					sepStr = "."
-				} else if strings.Contains(fullRespText, "?") {
-					sepStr = "?"
-				} else if strings.Contains(fullRespText, "!") {
-					sepStr = "!"
-				}
-				splitResp := strings.Split(strings.TrimSpace(fullRespText), sepStr)
-				fullRespSlice = append(fullRespSlice, strings.TrimSpace(splitResp[0])+sepStr)
-				fullRespText = splitResp[1]
+			if len(response.Choices) == 0 {
+				continue
+			}
+			content := removeSpecialCharacters(reasoning.Feed(response.Choices[0].Delta.Content))
+			fullfullRespText = fullfullRespText + content
+			fullRespText = fullRespText + content
+			if sents, rest := extractSentences(fullRespText); len(sents) > 0 {
+				fullRespSlice = append(fullRespSlice, sents...)
+				fullRespText = rest
 				select {
-				case speakReady <- strings.TrimSpace(splitResp[0]) + sepStr:
+				case speakReady <- sents[len(sents)-1]:
 				default:
 				}
 			}
@@ -595,13 +634,11 @@ func DoGetImage(msgs []openai.ChatCompletionMessage, param string, robot *vector
 		if len(respSlice)-1 < numInResp {
 			if !isDone {
 				logger.Println("Waiting for more content from LLM...")
-				for range speakReady {
-					respSlice = fullRespSlice
-					break
-				}
-			} else {
-				break
+				<-speakReady
+				// re-check: the signal may mean "done" rather than "new sentence"
+				continue
 			}
+			break
 		}
 		logger.Println(respSlice[numInResp])
 		acts := GetActionsFromString(respSlice[numInResp])
@@ -615,15 +652,21 @@ func DoGetImage(msgs []openai.ChatCompletionMessage, param string, robot *vector
 
 func DoNewRequest(robot *vector.Vector) {
 	time.Sleep(time.Second / 3)
-	robot.Conn.AppIntent(context.Background(), &vectorpb.AppIntentRequest{Intent: "knowledge_question"})
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	_, _ = robot.Conn.AppIntent(ctx, &vectorpb.AppIntentRequest{Intent: "knowledge_question"})
 }
 
 func PerformActions(msgs []openai.ChatCompletionMessage, actions []RobotAction, robot *vector.Vector, stopStop chan bool) bool {
 	// assuming we have behavior control already
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	stopPerforming := false
 	go func() {
-		for range stopStop {
+		select {
+		case <-stopStop:
 			stopPerforming = true
+		case <-ctx.Done():
 		}
 	}()
 	for _, action := range actions {
@@ -645,6 +688,10 @@ func PerformActions(msgs []openai.ChatCompletionMessage, actions []RobotAction, 
 			return true
 		case action.Action == ActionPlaySound:
 			DoPlaySound(action.Parameter, robot)
+		case action.Action == ActionRememberFact:
+			vars.AddActivePersonaFact(robot.Cfg.SerialNo, action.Parameter)
+		case action.Action == ActionSetSpeakerName:
+			vars.SetActivePersonaName(robot.Cfg.SerialNo, action.Parameter)
 		}
 	}
 	WaitForAnim_Queue(robot.Cfg.SerialNo)

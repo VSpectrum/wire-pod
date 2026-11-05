@@ -98,7 +98,7 @@ func SetBotGUID(esn string, guid string, guidHash string) error {
 
 func WriteTokenHash(esn string, tokenHash string) error {
 	// will return blank jdoc if it doesn't exist
-	jdoc, jdocExists := vars.GetJdoc(esn, "vic.AppTokens")
+	jdoc, jdocExists := vars.GetJdoc("vic:"+esn, "vic.AppTokens")
 	var tokenJson ClientTokenManager
 	if !jdocExists {
 		jdoc.DocVersion = 1
@@ -200,7 +200,7 @@ func CreateJWT(ctx context.Context, skipGuid bool, isPrimary bool) *tokenpb.Toke
 
 	// get esn using ip address of request
 	p, _ := peer.FromContext(ctx)
-	ipAddr := strings.TrimSpace(strings.Split(p.Addr.String(), ":")[0])
+	ipAddr := vars.ResolvePeerIP(strings.TrimSpace(strings.Split(p.Addr.String(), ":")[0]))
 	esn, err := GetEsnFromTarget(ipAddr)
 
 	// secondary handler

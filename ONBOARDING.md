@@ -15,6 +15,8 @@ Welcome to **`wire-pod`**! This document explains what this repository does, how
 5. [How to Verify Vector Is Communicating with `wire-pod`](#5-how-to-verify-vector-is-communicating-with-wire-pod)
 6. [Integrating Locally Hosted LLMs (LM Studio / Ollama)](#6-integrating-locally-hosted-llms-lm-studio--ollama)
 7. [How Updates & Code Changes Work (Server vs. Firmware)](#7-how-updates--code-changes-work-server-vs-firmware)
+8. [Concurrency, Deadlock Prevention & Concurrency Testing](#8-concurrency-deadlock-prevention--concurrency-testing)
+9. [Conversational Reliability, VAD & Dismissal Detection](#9-conversational-reliability-vad--dismissal-detection)
 
 ---
 
@@ -89,14 +91,28 @@ The repo is divided into two main parts:
 
 ### Option A: Running with Docker Compose (Recommended for Windows / macOS / Linux)
 
-Note: On Linux, using `network_mode: host` (or ensuring mDNS/Avahi is active on the host so `escapepod.local` resolves to your host IP) works best for Escape Pod firmware.
+#### One-Command Startup on Windows (`start-windows-docker.ps1`)
+Because Docker Desktop on Windows runs inside an isolated virtual network (`172.x.x.x`), its internal mDNS broadcast (`escapepod.local`) cannot reach your physical Wi-Fi/LAN on its own. Use the included PowerShell startup script to automatically detect your LAN IP, pass `HOST_IP` into Docker, and start the Windows Bonjour (`dns-sd.exe`) mDNS proxy in the background:
 
+```powershell
+# Start wire-pod and advertise escapepod.local on your LAN:
+.\start-windows-docker.ps1
+
+# Rebuild the container after editing Go code in chipper/ and restart:
+.\start-windows-docker.ps1 -Build
+```
+
+#### Manual Docker Compose Commands
 1. From the root of this repository, build and start the container:
    ```bash
    docker compose up -d --build
    ```
-2. Open **`http://localhost:8080`** in your browser to complete the first-time setup wizard.
-3. Whenever you edit Go code in `chipper/`, rebuild and restart with:
+2. **If running Docker Desktop on Windows manually**: Run this built-in Windows Bonjour command in PowerShell (replacing `192.168.1.155` with your PC's LAN IPv4 address) so Vector can find `escapepod.local`:
+   ```powershell
+   dns-sd.exe -P escapepod _app-proto._tcp local 8084 escapepod.local 192.168.1.155 txtv=0 lo=1 la=2
+   ```
+3. Open **`http://localhost:8080`** in your browser to complete the first-time setup wizard.
+4. Whenever you edit Go code in `chipper/`, rebuild and restart with:
    ```bash
    docker compose up -d --build
    ```
@@ -200,10 +216,21 @@ You can verify that Vector and `wire-pod` are properly connected using this chec
 3. **Watch the Live Log (`http://<server-ip>:8080` -> Log)**:
    - Open the **Log** tab in the web UI, check **Show all logs**, and say **"Hey Vector, what time is it?"** or **"Hey Vector, hello"**.
    - You should immediately see incoming audio stream logs, the transcribed text from Vosk/Whisper, and the matched intent sent back to Vector.
-4. **Troubleshooting If Vector Shows a Cloud/Wi-Fi Error Icon**:
-   - **mDNS Discovery (`escapepod.local`)**: From another computer on the same Wi-Fi network, run `ping escapepod.local`. It must resolve to the LAN IP of the machine running `wire-pod`. If it does not:
-     - Ensure `avahi-daemon` is running on Linux (`sudo systemctl status avahi-daemon`).
-     - If running on Windows/Docker/WSL2 where mDNS broadcasting isn't bridged to your Wi-Fi LAN, either add a local DNS entry on your router mapping `escapepod` / `escapepod.local` to your `wire-pod` machine's IP, or run Bonjour/mDNS on the host.
+4. **Troubleshooting If Vector Fails to Activate or Shows a Cloud/Wi-Fi Error Icon**:
+   - **mDNS Discovery (`escapepod.local`)**: From a computer on the same network, run `ping -4 escapepod.local`. It must resolve to the LAN IP of the machine running `wire-pod` (not `172.x.x.x`).
+     - On **Windows + Docker Desktop**, run `.\start-windows-docker.ps1` (which launches `dns-sd.exe -P escapepod _app-proto._tcp local 8084 escapepod.local <LAN-IP> txtv=0 lo=1 la=2`).
+     - On **Linux**, ensure `avahi-daemon` is running (`sudo systemctl status avahi-daemon`).
+   - **Windows Firewall Blocking Inbound LAN Connections (`Public` Network Profile)**:
+     - If your Windows Ethernet/Wi-Fi adapter is set to `Public`, Windows Firewall blocks Vector from reaching Docker on ports `80`, `443`, `8080`, and `8084`. Open **PowerShell as Administrator** and run:
+       ```powershell
+       New-NetFirewallRule -DisplayName "Wire-Pod LAN" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 80,443,8080,8084 -Profile Any
+       Set-NetConnectionProfile -InterfaceAlias "Ethernet" -NetworkCategory Private
+       ```
+   - **VPN Software (e.g., PureVPN / NordVPN / OpenVPN)**:
+     - Even when **Split Tunneling** is enabled for your browser (e.g., Chrome), VPN kernel filter services (such as `PureVPNNetworkGuardService`) block Docker Desktop's backend (`com.docker.backend.exe`) from opening outbound TCP sockets to Vector on `192.168.x.x:443` (`connectex: An attempt was made to access a socket in a way forbidden by its access permissions` in `%LOCALAPPDATA%\Docker\log\host\monitor.log`), causing **Bot Settings** to fail with `dial tcp 192.168.x.x:443: connect: connection refused`.
+     - Either add `C:\Program Files\Docker\Docker\resources\com.docker.backend.exe` to your VPN's split-tunnel bypass list or disconnect the VPN while using `wire-pod`.
+   - **401 (Unauthorized) in Bot Settings**:
+     - If **Bot Settings** returns `401 (Unauthorized)`, you can re-sync Vector's SDK token without re-running Bluetooth setup by calling Vector's onboard `user_authentication` endpoint while Vector's IP in `/data/chipper/jdocs/botSdkInfo.json` is temporarily set to Docker's gateway (`172.25.0.1`), or by clicking **Activate** again on `http://localhost:8080` -> **Bot Setup**.
    - **IP Address Changed**: If your router assigns Vector a new DHCP IP address, `wire-pod` automatically updates it the next time you say *"Hey Vector"*. You can also reserve a static DHCP lease for both your `wire-pod` host and Vector in your router settings.
 
 ---
@@ -237,4 +264,60 @@ A common question when developing in this repo is: *"If I edit code in this repo
   All voice transcription, intent matching, LLM integration, Lua scripting, audio streaming (`ExternalAudioStreamPlayback`), and voice settings (`SayTextRequest` / `UseVectorVoice`) live inside **`chipper/` on the server**. When you modify Go or web files in `chipper/`, simply **rebuild/restart the `wire-pod` server** and Vector will immediately use your new logic on the very next command.
 - **`wire-pod` Never Automatically Pushes Firmware to Vector**:
   Once Vector is on Escape Pod firmware (`2.0.1ep`) or custom firmware, `wire-pod` never overwrites or updates Vector's OS in the background. The `/api/get_ota` proxy endpoint in `chipper/pkg/wirepod/config-ws/webserver.go` is only ever called during the manual Recovery Mode Bluetooth setup wizard.
+
+---
+
+## 8. Concurrency, Deadlock Prevention & Concurrency Testing
+
+Under high request loads or intermittent network dropouts, asynchronous gRPC streams between `wire-pod` and Vector must not deadlock or leak goroutines.
+
+### Concurrency Primitives (`chipper/pkg/wirepod/ttr/deadlock_guard.go`)
+
+- **`SafeSendBool(ch, val)` & `SafeSendString(ch, val)`**:
+  Performs non-blocking channel dispatch using `select { case ch <- val: ... default: ... }`. Protects goroutines from blocking indefinitely if a receiving consumer has abandoned the channel or timed out.
+- **`WaitBoolWithTimeout(ctx, ch, duration, opName)`**:
+  Guarantees that waiting on channel signals is bounded by both context cancellation and explicit duration timeouts, logging diagnostic warnings upon missed deadlines.
+- **`Watchdog`**:
+  A lightweight operation monitor (`NewWatchdog(opName, deadline)`). If `watchdog.Stop()` is not called before the deadline expires, the watchdog dumps full runtime goroutine stack traces (`runtime.Stack`) to logs for immediate triage.
+
+### Behavior Control Invariants (`chipper/pkg/wirepod/ttr/bcontrol.go`)
+
+- Every gRPC call to Vector's Behavior Control service must dispatch `SafeSendBool(start, false)` on failure so callers waiting for control never hang.
+- Busy-spinning polling loops (`default: continue`) have been eliminated in favor of clean blocking `select { case <-stop: case <-ctx.Done(): }`.
+
+### Running Concurrency Tests
+
+Automated tests in `chipper/pkg/wirepod/ttr/deadlock_test.go` verify all concurrency paths:
+```bash
+# Inside docker or Linux host:
+cd chipper
+go test -v -race ./pkg/wirepod/ttr/...
+```
+
+Tests cover:
+- Channel unblocking on simulated network disconnects.
+- Watchdog stack capture verification.
+- 100-worker high-concurrency channel stress under the Go race detector.
+
+---
+
+## 9. Conversational Reliability, VAD & Dismissal Detection
+
+When using LLM back-and-forth conversations (`save_chat: true` / `{{newVoiceRequest||now}}`), Vector previously could become stuck listening or loop back into the LLM on farewells. Several mechanisms now guarantee clean session termination:
+
+### 1. Pure Silence Cutoff (`chipper/pkg/wirepod/speechrequest/speechrequest.go`)
+Standard VAD only checked inactive frame count if sufficient active voice frames were recorded (`ActiveFrames > 18`). When a user remained silent, `ActiveFrames` stayed `0`, keeping Vector listening for up to 30 seconds.
+- A dedicated silence threshold (`ActiveFrames < 8 && InactiveFrames >= 250`, or 2.5 seconds) immediately signals end-of-speech and concludes the voice request.
+
+### 2. Conversation Dismissal Parser (`chipper/pkg/wirepod/ttr/conversation_exit.go`)
+Common phrases to end a conversation:
+- *"that's all"*, *"never mind"*, *"goodbye"*, *"bye"*, *"i'm good"*, *"no thanks"*, *"cancel"*, *"stop"*
+These are matched via regex prior to routing to the LLM. Vector triggers his native confirmation or goodbye intent and immediately ends the voice session without incurring LLM latency or triggering follow-up listening.
+
+### 3. Prompt Guard (`chipper/pkg/wirepod/ttr/kgsim_cmds.go`)
+The system prompt for LLM conversations explicitly instructs the model never to output `{{newVoiceRequest||now}}` when acknowledging farewells or dismissals.
+
+### 4. SDK AudioFeed Isolation
+Background continuous `AudioFeed` streaming on Vector's SDK connection has been removed from `watcher.go` to keep the robot's hardware microphone queue unblocked for STT voice capture.
+
 

@@ -130,13 +130,15 @@ func WriteToIniSecondary(esn, guid, ip string) {
 func StoreBotInfo(ctx context.Context, thing string) {
 	var appendNew bool = true
 	p, _ := peer.FromContext(ctx)
-	ipAddr := strings.TrimSpace(strings.Split(p.Addr.String(), ":")[0])
+	ipAddr := vars.ResolvePeerIP(strings.TrimSpace(strings.Split(p.Addr.String(), ":")[0]))
 	botEsn := strings.TrimSpace(strings.Split(thing, ":")[1])
 	vars.BotInfo.GlobalGUID = "tni1TRsTRTaNSapjo0Y+Sw=="
 	for num, robot := range vars.BotInfo.Robots {
 		if robot.Esn == botEsn {
 			appendNew = false
-			vars.BotInfo.Robots[num].IPAddress = ipAddr
+			if !(vars.IsDockerGatewayIP(ipAddr) && robot.IPAddress != "" && !vars.IsDockerGatewayIP(robot.IPAddress)) {
+				vars.BotInfo.Robots[num].IPAddress = ipAddr
+			}
 		}
 	}
 	if appendNew {

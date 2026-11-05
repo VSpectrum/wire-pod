@@ -283,6 +283,7 @@ function checkKG() {
 
 function sendKGAPIKey() {
   const provider = getE("kgProvider").value;
+  const turnOnWakeWordEl = getE("turnOnWakeWordYes");
   const data = {
     enable: true,
     provider,
@@ -297,6 +298,7 @@ function sendKGAPIKey() {
     save_chat: false,
     commands_enable: false,
     endpoint: "",
+    turn_on_wake_word: turnOnWakeWordEl ? turnOnWakeWordEl.checked : true,
   };
   if (provider === "openai") {
     data.key = getE("openaiKey").value;
@@ -385,6 +387,9 @@ function updateKGAPI() {
         getE("houndKey").value = data.key;
         getE("houndID").value = data.id;
         getE("intentyes").checked = data.intentgraph
+      }
+      if (getE("turnOnWakeWordYes")) {
+        getE("turnOnWakeWordYes").checked = data.turn_on_wake_word !== undefined ? data.turn_on_wake_word : true;
       }
       checkKG();
     });
@@ -499,7 +504,7 @@ function updateColor(id) {
 
 
 function showLog() {
-  toggleVisibility(["section-intents", "section-log", "section-botauth", "section-version", "section-uicustomizer"], "section-log", "icon-Logs");
+  toggleVisibility(["section-intents", "section-log", "section-botauth", "section-version", "section-uicustomizer", "section-personas"], "section-log", "icon-Logs");
   logDivArea = getE("botTranscriptedTextArea");
   getE("logscrollbottom").checked = true;
   logP = document.createElement("p");
@@ -588,12 +593,119 @@ function showLanguage() {
 }
 
 function showVersion() {
-  toggleVisibility(["section-log", "section-botauth", "section-intents", "section-version", "section-uicustomizer"], "section-version", "icon-Version");
+  toggleVisibility(["section-log", "section-botauth", "section-intents", "section-version", "section-uicustomizer", "section-personas"], "section-version", "icon-Version");
   checkUpdate();
 }
 
 function showIntents() {
-  toggleVisibility(["section-log", "section-botauth", "section-intents", "section-version", "section-uicustomizer"], "section-intents", "icon-Intents");
+  toggleVisibility(["section-log", "section-botauth", "section-intents", "section-version", "section-uicustomizer", "section-personas"], "section-intents", "icon-Intents");
+}
+
+function showPersonas() {
+  toggleVisibility(["section-log", "section-botauth", "section-intents", "section-version", "section-uicustomizer", "section-personas"], "section-personas", "icon-Personas");
+  loadPersonas();
+}
+
+function escapeHtml(str) {
+  if (!str) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function loadPersonas() {
+  const container = getE("personasList");
+  if (!container) return;
+  container.innerHTML = "<p>Loading personas...</p>";
+  fetch("/api/get_personas")
+    .then((res) => res.json())
+    .then((data) => {
+      const personas = data.personas || [];
+      const activeMap = data.active_speaker || {};
+      if (personas.length === 0) {
+        container.innerHTML = "<p>No voice personas recorded yet. Say 'Hey Vector' and ask a question to automatically create a voice profile!</p>";
+        return;
+      }
+      let html = "";
+      const activeEntries = Object.entries(activeMap);
+      if (activeEntries.length > 0) {
+        const [, act] = activeEntries[0];
+        if (act && act.persona_name) {
+          const pct = Math.round((act.similarity || 0) * 100);
+          html += `<p><b>Most Recent Speaker:</b> ${escapeHtml(act.persona_name)} (${pct}% voice match)</p><hr class="small-hr">`;
+        }
+      }
+      personas.forEach((p) => {
+        const facts = p.facts || [];
+        const questions = p.questions || [];
+        const safeId = escapeHtml(p.id);
+        html += `<div style="border: 1px solid #444; border-radius: 8px; padding: 12px; margin-bottom: 14px; text-align: left;">
+          <h3 style="margin-top: 0;">${escapeHtml(p.name)} <small style="color: #888;">(${safeId} &bull; ${p.sample_count} voice samples &bull; Last heard: ${escapeHtml(p.last_seen_at || "never")})</small></h3>
+          <div style="margin-bottom: 8px;">
+            <input type="text" id="rename-${safeId}" placeholder="New name (or existing name to merge)" value="${escapeHtml(p.name)}" style="width: 220px;" />
+            <button onclick="renamePersona('${safeId}')">Save / Merge Name</button>
+            <button onclick="deletePersona('${safeId}')">Delete Profile</button>
+          </div>
+          <p style="margin-bottom: 4px;"><b>Profile Facts Tally (${facts.length}):</b></p>
+          <ul style="margin-top: 4px;">
+            ${facts.length === 0 ? "<li><i>No facts stored yet</i></li>" : facts.map((f, idx) => `<li>${escapeHtml(f)} <a href="#" onclick="deletePersonaFact('${safeId}', ${idx}); return false;" style="color: #ff6b6b; margin-left: 6px;">[x]</a></li>`).join("")}
+          </ul>
+          <div style="margin-bottom: 8px;">
+            <input type="text" id="fact-${safeId}" placeholder="Add a fact about ${escapeHtml(p.name)}..." style="width: 260px;" />
+            <button onclick="addPersonaFact('${safeId}')">Add Fact</button>
+          </div>
+          <p style="margin-bottom: 4px;"><b>Recent Questions Asked (${questions.length}):</b></p>
+          <ul style="margin-top: 4px; max-height: 140px; overflow-y: auto;">
+            ${questions.length === 0 ? "<li><i>No questions logged yet</i></li>" : questions.slice(-10).reverse().map((q) => `<li>"${escapeHtml(q.text)}" <small style="color: #888;">(${escapeHtml(q.timestamp)})</small></li>`).join("")}
+          </ul>
+        </div>`;
+      });
+      container.innerHTML = html;
+    })
+    .catch((err) => {
+      console.error(err);
+      container.innerHTML = "<p>Error loading voice personas.</p>";
+    });
+}
+
+function renamePersona(id) {
+  const input = getE(`rename-${id}`);
+  if (!input || !input.value.trim()) return;
+  fetch("/api/rename_persona", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: id, name: input.value.trim() }),
+  }).then(() => loadPersonas());
+}
+
+function addPersonaFact(id) {
+  const input = getE(`fact-${id}`);
+  if (!input || !input.value.trim()) return;
+  fetch("/api/add_persona_fact", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: id, fact: input.value.trim() }),
+  }).then(() => loadPersonas());
+}
+
+function deletePersonaFact(id, index) {
+  fetch("/api/delete_persona_fact", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: id, index: index }),
+  }).then(() => loadPersonas());
+}
+
+function deletePersona(id) {
+  if (!confirm("Delete this voice persona and all of its stored facts/questions?")) return;
+  fetch("/api/delete_persona", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: id }),
+  }).then(() => loadPersonas());
 }
 
 function showWeather() {

@@ -30,10 +30,10 @@ func (s *JdocServer) WriteDoc(ctx context.Context, req *jdocspb.WriteDocReq) (*j
 
 	esn := strings.Split(req.Thing, ":")[1]
 	p, _ := peer.FromContext(ctx)
-	ipAddr := strings.Split(p.Addr.String(), ":")[0]
+	ipAddr := vars.ResolvePeerIP(strings.Split(p.Addr.String(), ":")[0])
 
 	for ind, bot := range vars.BotInfo.Robots {
-		if bot.Esn == esn && bot.IPAddress != ipAddr {
+		if bot.Esn == esn && bot.IPAddress != ipAddr && !(vars.IsDockerGatewayIP(ipAddr) && bot.IPAddress != "" && !vars.IsDockerGatewayIP(bot.IPAddress)) {
 			logger.Println(esn + "'s IP address has changed to " + ipAddr + ", noting")
 			vars.BotInfo.Robots[ind].IPAddress = ipAddr
 			writeBytes, _ := json.Marshal(vars.BotInfo)
@@ -56,10 +56,10 @@ func (s *JdocServer) ReadDocs(ctx context.Context, req *jdocspb.ReadDocsReq) (*j
 	esn := strings.Split(req.Thing, ":")[1]
 	isAlreadyKnown := IsBotInInfo(esn)
 	p, _ := peer.FromContext(ctx)
-	ipAddr := strings.Split(p.Addr.String(), ":")[0]
+	ipAddr := vars.ResolvePeerIP(strings.Split(p.Addr.String(), ":")[0])
 
 	for ind, bot := range vars.BotInfo.Robots {
-		if bot.Esn == esn && bot.IPAddress != ipAddr {
+		if bot.Esn == esn && bot.IPAddress != ipAddr && !(vars.IsDockerGatewayIP(ipAddr) && bot.IPAddress != "" && !vars.IsDockerGatewayIP(bot.IPAddress)) {
 			logger.Println(esn + "'s IP address has changed to " + ipAddr + ", noting")
 			vars.BotInfo.Robots[ind].IPAddress = ipAddr
 			writeBytes, _ := json.Marshal(vars.BotInfo)
@@ -96,6 +96,7 @@ func (s *JdocServer) ReadDocs(ctx context.Context, req *jdocspb.ReadDocsReq) (*j
 					logger.Println("ReadJdocs: bot " + esn + " matched with IP " + ipAddr + " in token store")
 					matched = true
 					tokenserver.RemoveFromPrimaryStore(num)
+					break
 				}
 			}
 			sessionMatched := false

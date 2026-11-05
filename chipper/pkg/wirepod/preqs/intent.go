@@ -12,6 +12,10 @@ import (
 
 // This is here for compatibility with 1.6 and older software
 func (s *Server) ProcessIntent(req *vtt.IntentRequest) (*vtt.IntentResponse, error) {
+	ttr.EnsureRobotWatcher(req.Device)
+	ttr.MarkVoiceSessionStart(req.Device)
+	defer ttr.MarkVoiceSessionEnd(req.Device)
+
 	var successMatched bool
 	speechReq := sr.ReqToSpeechRequest(req)
 	var transcribedText string
@@ -23,7 +27,15 @@ func (s *Server) ProcessIntent(req *vtt.IntentRequest) (*vtt.IntentResponse, err
 			return nil, nil
 		}
 		if strings.TrimSpace(transcribedText) == "" {
+			logger.Println("Bot " + req.Device + " no speech transcribed, ending voice session")
+			ttr.MarkVoiceSessionEnd(req.Device)
 			ttr.IntentPass(req, "intent_system_noaudio", "", map[string]string{}, false)
+			return nil, nil
+		}
+		if intent, _, isDismiss := ttr.IsConversationDismissal(transcribedText); isDismiss {
+			logger.Println("Bot " + req.Device + " conversation exit detected ('" + transcribedText + "'), closing")
+			ttr.MarkVoiceSessionEnd(req.Device)
+			ttr.IntentPass(req, intent, transcribedText, map[string]string{}, false)
 			return nil, nil
 		}
 		successMatched = ttr.ProcessTextAll(req, transcribedText, vars.IntentList, speechReq.IsOpus)
@@ -49,8 +61,6 @@ func (s *Server) ProcessIntent(req *vtt.IntentRequest) (*vtt.IntentResponse, err
 			if err != nil {
 				logger.Println("LLM error: " + err.Error())
 				logger.LogUI("LLM error: " + err.Error())
-				ttr.IntentPass(req, "intent_system_unmatched", transcribedText, map[string]string{"": ""}, false)
-				ttr.KGSim(req.Device, "There was an error getting a response from the L L M. Check the logs in the web interface.")
 			}
 			logger.Println("Bot " + speechReq.Device + " request served.")
 			return nil, nil

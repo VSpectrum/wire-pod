@@ -167,7 +167,7 @@ func connCheck(w http.ResponseWriter, r *http.Request) {
 		}
 		if PingerEnabled {
 			//logger.Println("connCheck request from " + r.RemoteAddr)
-			robotTarget := strings.Split(r.RemoteAddr, ":")[0]
+			robotTarget := vars.ResolvePeerIP(strings.Split(r.RemoteAddr, ":")[0])
 			jsonB, _ := json.Marshal(vars.BotInfo)
 			json := string(jsonB)
 			if strings.Contains(json, strings.TrimSpace(robotTarget)) {

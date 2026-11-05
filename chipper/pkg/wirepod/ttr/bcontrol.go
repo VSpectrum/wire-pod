@@ -3,6 +3,7 @@ package wirepod_ttr
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/fforchino/vector-go-sdk/pkg/vector"
 	"github.com/fforchino/vector-go-sdk/pkg/vectorpb"
@@ -18,57 +19,63 @@ func sayText(robot *vector.Vector, text string) {
 		},
 	}
 	go func() {
-		start := make(chan bool)
-		stop := make(chan bool)
+		start := make(chan bool, 1)
+		stop := make(chan bool, 1)
 		go func() {
 			// * begin - modified from official vector-go-sdk
-			r, err := robot.Conn.BehaviorControl(
-				context.Background(),
-			)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			r, err := robot.Conn.BehaviorControl(ctx)
 			if err != nil {
-				log.Println(err)
+				log.Println("[DeadlockGuard:sayText] BehaviorControl error:", err)
+				SafeSendBool(start, false)
 				return
 			}
 
 			if err := r.Send(controlRequest); err != nil {
-				log.Println(err)
+				log.Println("[DeadlockGuard:sayText] Send error:", err)
+				SafeSendBool(start, false)
 				return
 			}
 
 			for {
 				ctrlresp, err := r.Recv()
 				if err != nil {
-					log.Println(err)
+					log.Println("[DeadlockGuard:sayText] Recv error:", err)
+					SafeSendBool(start, false)
 					return
 				}
 				if ctrlresp.GetControlGrantedResponse() != nil {
-					start <- true
+					SafeSendBool(start, true)
 					break
 				}
 			}
 
-			for {
-				select {
-				case <-stop:
-					if err := r.Send(
-						&vectorpb.BehaviorControlRequest{
-							RequestType: &vectorpb.BehaviorControlRequest_ControlRelease{
-								ControlRelease: &vectorpb.ControlRelease{},
-							},
-						},
-					); err != nil {
-						log.Println(err)
-						return
-					}
-					return
-				default:
-					continue
-				}
+			select {
+			case <-stop:
+			case <-ctx.Done():
+			}
+
+			if err := r.Send(
+				&vectorpb.BehaviorControlRequest{
+					RequestType: &vectorpb.BehaviorControlRequest_ControlRelease{
+						ControlRelease: &vectorpb.ControlRelease{},
+					},
+				},
+			); err != nil {
+				log.Println("[DeadlockGuard:sayText] Release error:", err)
+				return
 			}
 			// * end - modified from official vector-go-sdk
 		}()
-		for range start {
-			robot.Conn.SayText(
+
+		select {
+		case granted := <-start:
+			if !granted {
+				return
+			}
+			_, _ = robot.Conn.SayText(
 				context.Background(),
 				&vectorpb.SayTextRequest{
 					Text:           text,
@@ -76,7 +83,10 @@ func sayText(robot *vector.Vector, text string) {
 					DurationScalar: 1.0,
 				},
 			)
-			stop <- true
+			SafeSendBool(stop, true)
+		case <-time.After(8 * time.Second):
+			logger.Println("[DeadlockGuard:sayText] Timed out waiting for behavior control")
+			SafeSendBool(stop, true)
 		}
 	}()
 }
@@ -92,49 +102,48 @@ func BControl(robot *vector.Vector, ctx context.Context, start, stop chan bool) 
 
 	go func() {
 		// * begin - modified from official vector-go-sdk
-		r, err := robot.Conn.BehaviorControl(
-			ctx,
-		)
+		r, err := robot.Conn.BehaviorControl(ctx)
 		if err != nil {
-			logger.Println(err)
+			logger.Println("[DeadlockGuard:BControl] BehaviorControl error:", err)
+			SafeSendBool(start, false)
 			return
 		}
 
 		if err := r.Send(controlRequest); err != nil {
-			logger.Println(err)
+			logger.Println("[DeadlockGuard:BControl] Send error:", err)
+			SafeSendBool(start, false)
 			return
 		}
 
 		for {
 			ctrlresp, err := r.Recv()
 			if err != nil {
-				logger.Println(err)
+				logger.Println("[DeadlockGuard:BControl] Recv error:", err)
+				SafeSendBool(start, false)
 				return
 			}
 			if ctrlresp.GetControlGrantedResponse() != nil {
-				start <- true
+				SafeSendBool(start, true)
 				break
 			}
 		}
 
-		for {
-			select {
-			case <-stop:
-				logger.Println("KGSim: releasing behavior control (interrupt)")
-				if err := r.Send(
-					&vectorpb.BehaviorControlRequest{
-						RequestType: &vectorpb.BehaviorControlRequest_ControlRelease{
-							ControlRelease: &vectorpb.ControlRelease{},
-						},
-					},
-				); err != nil {
-					logger.Println(err)
-					return
-				}
-				return
-			default:
-				continue
-			}
+		select {
+		case <-stop:
+			logger.Println("KGSim: releasing behavior control (interrupt/stop)")
+		case <-ctx.Done():
+			logger.Println("KGSim: releasing behavior control (context cancelled)")
+		}
+
+		if err := r.Send(
+			&vectorpb.BehaviorControlRequest{
+				RequestType: &vectorpb.BehaviorControlRequest_ControlRelease{
+					ControlRelease: &vectorpb.ControlRelease{},
+				},
+			},
+		); err != nil {
+			logger.Println("[DeadlockGuard:BControl] ControlRelease error:", err)
+			return
 		}
 		// * end - modified from official vector-go-sdk
 	}()

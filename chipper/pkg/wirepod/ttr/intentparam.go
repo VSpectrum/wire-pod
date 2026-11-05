@@ -220,6 +220,9 @@ func ParamChecker(req interface{}, intent string, speechText string, botSerial s
 				username = username + " " + strings.TrimSpace(splitPhrase[2]) + " " + strings.TrimSpace(splitPhrase[3])
 			}
 			logger.Println("Name parsed from speech: " + "`" + username + "`")
+			if strings.TrimSpace(username) != "" {
+				vars.SetActivePersonaName(botSerial, username)
+			}
 			intentParam = "username"
 			intentParamValue = username
 			intentParams = map[string]string{intentParam: intentParamValue}
@@ -615,6 +618,9 @@ func prehistoricParamChecker(req interface{}, intent string, speechText string) 
 				username = username + " " + strings.TrimSpace(splitPhrase[2]) + " " + strings.TrimSpace(splitPhrase[3])
 			}
 			logger.Println("Name parsed from speech: " + "`" + username + "`")
+			if strings.TrimSpace(username) != "" {
+				vars.SetActivePersonaName("", username)
+			}
 			intentParam = "username"
 			intentParamValue = username
 			intentParams = map[string]string{intentParam: intentParamValue}

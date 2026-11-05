@@ -10,8 +10,20 @@ import (
 )
 
 func InterruptKGSimWhenTouchedOrWaked(rob *vector.Vector, stop chan bool, stopStop chan bool) bool {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		select {
+		case <-stopStop:
+			logger.Println("KG Interrupter has been stopped")
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
 	strm, err := rob.Conn.EventStream(
-		context.Background(),
+		ctx,
 		&vectorpb.EventRequest{
 			ListType: &vectorpb.EventRequest_WhiteList{
 				WhiteList: &vectorpb.FilterList{
@@ -24,24 +36,17 @@ func InterruptKGSimWhenTouchedOrWaked(rob *vector.Vector, stop chan bool, stopSt
 		logger.Println("Couldn't make an event stream: " + err.Error())
 		return false
 	}
-	var stopFunc bool
-	go func() {
-		for range stopStop {
-			logger.Println("KG Interrupter has been stopped")
-			stopFunc = true
-			break
-		}
-	}()
+
 	var origTouchValue uint32
 	var origValueGotten bool
 	var valsAboveValue int
 	var valsAboveValueMax int = 5
 	var stopResponse bool
+
 	for {
-		var resp *vectorpb.EventResponse
-		resp, err = strm.Recv()
+		resp, err := strm.Recv()
 		if err != nil {
-			break
+			return false
 		}
 		switch resp.Event.EventType.(type) {
 		case *vectorpb.Event_RobotState:
@@ -53,12 +58,11 @@ func InterruptKGSimWhenTouchedOrWaked(rob *vector.Vector, stop chan bool, stopSt
 			break
 		}
 	}
+
 	if origValueGotten {
 		for {
-			var resp *vectorpb.EventResponse
-			resp, err = strm.Recv()
+			resp, err := strm.Recv()
 			if err != nil {
-				logger.Println("Event stream error: " + err.Error())
 				return false
 			}
 			switch resp.Event.EventType.(type) {
@@ -78,13 +82,9 @@ func InterruptKGSimWhenTouchedOrWaked(rob *vector.Vector, stop chan bool, stopSt
 				stopResponse = true
 			}
 			if stopResponse {
-				stop <- true
+				SafeSendBool(stop, true)
 				time.Sleep(time.Second / 4)
 				return true
-			}
-			if stopFunc {
-				strm.CloseSend()
-				return false
 			}
 		}
 	}

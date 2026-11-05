@@ -126,6 +126,10 @@ func (req *SpeechRequest) DetectEndOfSpeech() (bool, bool) {
 			logger.Println("(Bot " + req.Device + ") End of speech detected.")
 			return true, true
 		}
+		if req.ActiveFrames < 8 && req.InactiveFrames >= 250 {
+			logger.Println("(Bot " + req.Device + ") Silence timeout detected (no speech heard).")
+			return true, false
+		}
 	}
 	if req.ActiveFrames < 5 {
 		return false, false

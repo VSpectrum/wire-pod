@@ -36,6 +36,10 @@ type apiConfig struct {
 		Endpoint               string  `json:"endpoint"`
 		TopP                   float32 `json:"top_p"`
 		Temperature            float32 `json:"temp"`
+		// max tokens per LLM response, including a reasoning model's thinking.
+		// 0 = default (2048 for OpenAI, 8192 for together/custom)
+		MaxTokens      int  `json:"max_tokens"`
+		TurnOnWakeWord bool `json:"turn_on_wake_word"`
 	} `json:"knowledge"`
 	STT struct {
 		Service  string `json:"provider"`
@@ -58,6 +62,7 @@ func WriteConfigToDisk() {
 
 func CreateConfigFromEnv() {
 	// if no config exists, create it
+	APIConfig.Knowledge.TurnOnWakeWord = true
 	if os.Getenv("WEATHERAPI_ENABLED") == "true" {
 		APIConfig.Weather.Enable = true
 		APIConfig.Weather.Provider = os.Getenv("WEATHERAPI_PROVIDER")
@@ -105,6 +110,8 @@ func ReadConfig() {
 			logger.Println(err)
 			return
 		}
+		// default TurnOnWakeWord to true if not present in existing JSON
+		APIConfig.Knowledge.TurnOnWakeWord = true
 		err = json.Unmarshal(configBytes, &APIConfig)
 		if err != nil {
 			APIConfig.Knowledge.Enable = false

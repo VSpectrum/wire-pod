@@ -42,6 +42,11 @@
           <a href="#" onclick="showIntents(); return false;"><i class="fa-solid fa-microphone-lines" id="icon-Intents"
               name="icon"></i><br />Custom Intents</a>
         </div>
+        <!--Voice Personas-->
+        <div class="main-nav-child">
+          <a href="#" onclick="showPersonas(); return false;"><i class="fa-solid fa-users" id="icon-Personas"
+              name="icon"></i><br />Voice Personas</a>
+        </div>
         <!--Logs-->
         <div class="main-nav-child">
           <a href="#" onclick="showLog(); return false;"><i class="fa-solid fa-file-lines" id="icon-Logs"
@@ -202,6 +207,15 @@
           <option style="font-family: 'DroidSans';" value="droidsans" selected="selected">Droid Sans (default)</option>
           <option style="font-family: 'IBMVGA';" value="ibmvga">IBM VGA 8x16 (retro)</option>
         </select>
+        <hr />
+      </div>
+
+      <div id="section-personas" style="display: none">
+        <h2>Voice Personas &amp; Speaker Profiles</h2>
+        <hr class="small-hr">
+        <p><small class="desc">Vector automatically clusters voices using Vosk speaker embeddings and keeps a running tally of facts and questions for each person. Say "Hey Vector, my name is [Name]" or rename a speaker below (renaming to an existing name merges the two voice profiles).</small></p>
+        <button onclick="loadPersonas()">Refresh Personas</button>
+        <div id="personasList" style="margin-top: 15px;"></div>
         <hr />
       </div>
 

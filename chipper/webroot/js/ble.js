@@ -14,8 +14,11 @@ function showBotAuth() {
 }
 
 function toggleSections(showSection, icon) {
-  const sections = ["section-intents", "section-log", "section-botauth", "section-version", "section-uicustomizer"];
-  sections.forEach((section) => (document.getElementById(section).style.display = "none"));
+  const sections = ["section-intents", "section-log", "section-botauth", "section-version", "section-uicustomizer", "section-personas"];
+  sections.forEach((section) => {
+    const el = document.getElementById(section);
+    if (el) el.style.display = "none";
+  });
   document.getElementById(showSection).style.display = "block";
   updateColor(icon);
 }

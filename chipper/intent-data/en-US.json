@@ -166,7 +166,7 @@
 	},
 	{	
 		"name": "intent_imperative_lookatme", 
-		"keyphrases" : ["stare", "at me" ],
+		"keyphrases" : ["stare", "at me", "look at me", "face me", "turn to me", "turn towards me" ],
 		"requiresexact": false
 	},
 	{	

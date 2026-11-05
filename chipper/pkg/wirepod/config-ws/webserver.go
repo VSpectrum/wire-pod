@@ -59,6 +59,16 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 		handleIsRunning(w)
 	case "delete_chats":
 		handleDeleteChats(w)
+	case "get_personas":
+		handleGetPersonas(w)
+	case "rename_persona":
+		handleRenamePersona(w, r)
+	case "add_persona_fact":
+		handleAddPersonaFact(w, r)
+	case "delete_persona_fact":
+		handleDeletePersonaFact(w, r)
+	case "delete_persona":
+		handleDeletePersona(w, r)
 	case "get_ota":
 		handleGetOTA(w, r)
 	case "get_version_info":
@@ -287,7 +297,111 @@ func handleIsRunning(w http.ResponseWriter) {
 
 func handleDeleteChats(w http.ResponseWriter) {
 	vars.RememberedChats = []vars.RememberedChat{}
+	vars.ClearAllPersonaChats()
 	fmt.Fprint(w, "done")
+}
+
+func handleGetPersonas(w http.ResponseWriter) {
+	personas, active := vars.GetPersonasSnapshot()
+	type PersonaView struct {
+		ID          string                 `json:"id"`
+		Name        string                 `json:"name"`
+		Named       bool                   `json:"named"`
+		SampleCount int                    `json:"sample_count"`
+		Facts       []string               `json:"facts"`
+		Questions   []vars.PersonaQuestion `json:"questions"`
+		ChatCount   int                    `json:"chat_count"`
+		CreatedAt   string                 `json:"created_at"`
+		LastSeenAt  string                 `json:"last_seen_at"`
+	}
+	views := make([]PersonaView, 0, len(personas))
+	for _, p := range personas {
+		views = append(views, PersonaView{
+			ID:          p.ID,
+			Name:        p.Name,
+			Named:       p.Named,
+			SampleCount: p.SampleCount,
+			Facts:       p.Facts,
+			Questions:   p.Questions,
+			ChatCount:   len(p.Chats),
+			CreatedAt:   p.CreatedAt,
+			LastSeenAt:  p.LastSeenAt,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"personas":       views,
+		"active_speaker": active,
+	})
+}
+
+func handleRenamePersona(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.ID) == "" || strings.TrimSpace(req.Name) == "" {
+		http.Error(w, "id and name are required", http.StatusBadRequest)
+		return
+	}
+	updated, err := vars.RenamePersonaByID(req.ID, req.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(updated)
+}
+
+func handleAddPersonaFact(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID   string `json:"id"`
+		Fact string `json:"fact"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := vars.AddPersonaFactByID(req.ID, req.Fact); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	fmt.Fprint(w, "Fact added.")
+}
+
+func handleDeletePersonaFact(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID    string `json:"id"`
+		Index int    `json:"index"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := vars.DeletePersonaFactByID(req.ID, req.Index); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	fmt.Fprint(w, "Fact deleted.")
+}
+
+func handleDeletePersona(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := vars.DeletePersonaByID(req.ID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	fmt.Fprint(w, "Persona deleted.")
 }
 
 func handleGetOTA(w http.ResponseWriter, r *http.Request) {
